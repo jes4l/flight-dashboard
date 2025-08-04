@@ -33,6 +33,24 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
+def get_flight_route(flight_id):
+    try:
+        url = f"https://api.adsbdb.com/v0/callsign/{flight_id.strip()}"
+        resp = requests.get(url)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        route = data.get('response', {}).get('flightroute')
+        if not route:
+            return None
+        origin = route['origin']
+        dest = route['destination']
+        origin_str = f"{origin['municipality']} ({origin['iata_code']})"
+        dest_str = f"{dest['municipality']} ({dest['iata_code']})"
+        return f"{origin_str} ---> {dest_str}"
+    except Exception:
+        return None
+
 def main():
     token = get_token()
     prev_aircraft = set()
@@ -70,8 +88,13 @@ def main():
                 if dist <= RADIUS_KM:
                     curr_aircraft.add(plane_id)
                     if plane_id not in prev_aircraft:
+                        route = get_flight_route(flight_id) if flight_id != "Unknown" else None
+                        if route is None:
+                            route_info = "\n  Route: Private Charter Flight"
+                        else:
+                            route_info = f"\n  Route: {route}"
                         speed_kmh = "N/A" if vel == "N/A" else round(vel * 3.6, 2)
-                        print(f"Plane found in 5 km radius:\n  Plane ID: {plane_id}\n  Flight ID: {flight_id}\n  Speed: {speed_kmh} km/h\n  Heading: {track} degrees\n  Altitude: {alt} m\n---")
+                        print(f"Plane found in 5 km radius:\n  Plane ID: {plane_id}\n  Flight ID: {flight_id}\n  Speed: {speed_kmh} km/h\n  Heading: {track} degrees\n  Altitude: {alt} m{route_info}\n---")
             
             prev_aircraft = curr_aircraft
             time.sleep(10)
