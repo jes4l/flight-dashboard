@@ -1,0 +1,84 @@
+import requests
+import time
+import math
+import json
+
+# api creds, file is NOT on repo
+with open('credentials.json', 'r') as f:
+    creds = json.load(f)
+CLIENT_ID, CLIENT_SECRET = creds['clientId'], creds['clientSecret']
+
+# home and radius 
+LAT, LON = 51.601103878874994, -0.28697137009237705
+RADIUS_KM = 5
+
+DELTA_LAT = (RADIUS_KM / 6371) * (180 / math.pi) * 1.2
+DELTA_LON = DELTA_LAT / math.cos(math.radians(LAT)) * 1.2
+LAMIN, LAMAX = LAT - DELTA_LAT, LAT + DELTA_LAT
+LOMIN, LOMAX = LON - DELTA_LON, LON + DELTA_LON
+
+def get_token():
+    url = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+    data = {"grant_type": "client_credentials", "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
+    resp = requests.post(url, data=data)
+    if resp.status_code != 200:
+        raise Exception(f"Token failed: {resp.text}")
+    return resp.json()["access_token"]
+
+# spherical distance formula for cirlce radius of 2 poinsts
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat, dlon = map(math.radians, (lat2 - lat1, lon2 - lon1))
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+def main():
+    token = get_token()
+    prev_aircraft = set()
+
+    while True:
+        try:
+            headers = {"Authorization": f"Bearer {token}"}
+            params = {"lamin": LAMIN, "lomin": LOMIN, "lamax": LAMAX, "lomax": LOMAX}
+            resp = requests.get("https://opensky-network.org/api/states/all", params=params, headers=headers)
+            
+            if resp.status_code == 401:
+                print("Token has expired! ")
+                token = get_token()
+                continue
+            
+            if resp.status_code != 200:
+                print(f"API error: {resp.status_code} - {resp.text}")
+                time.sleep(10)
+                continue
+            
+            states = resp.json().get("states") or []
+            curr_aircraft = set()
+            
+            for state in states:
+                # plane id is the ICAO24
+                # flight id is the Call Sign
+                plane_id, flight_id, _, _, _, lon, lat, alt, on_ground, vel, track, *_ = state + [None] * (11 - len(state))
+                flight_id = flight_id or "Unknown"
+                alt, vel, track = alt or "N/A", vel or "N/A", track or "N/A"
+                
+                if lat is None or lon is None or on_ground:
+                    continue
+                
+                dist = haversine(LAT, LON, lat, lon)
+                if dist <= RADIUS_KM:
+                    curr_aircraft.add(plane_id)
+                    if plane_id not in prev_aircraft:
+                        speed_kmh = "N/A" if vel == "N/A" else round(vel * 3.6, 2)
+                        print(f"Plane found in 5 km radius:\n  Plane ID: {plane_id}\n  Flight ID: {flight_id}\n  Speed: {speed_kmh} km/h\n  Heading: {track} degrees\n  Altitude: {alt} m\n---")
+            
+            prev_aircraft = curr_aircraft
+            time.sleep(10)
+        
+        except Exception as e:
+            print(f"Error: {e}")
+            time.sleep(10)
+
+if __name__ == "__main__":
+    main()
